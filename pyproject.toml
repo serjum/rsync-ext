@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rsync-ext"
+version = "0.1.0"
+description = "GNOME Files extension for sending local files to saved rsync SSH destinations"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "OpenAI Codex" }]
+license = "MIT"
+dependencies = []
+
+[project.scripts]
+rsync-ext = "rsync_ext.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

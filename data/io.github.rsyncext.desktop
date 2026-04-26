@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Rsync Ext
+Comment=Manage rsync destinations and send files to servers
+Exec=rsync-ext app
+Icon=folder-remote
+Terminal=false
+Categories=Utility;GTK;FileTools;
+StartupNotify=true
