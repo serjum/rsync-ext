@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            python3-gi \
+            python3-nautilus \
+            gir1.2-adw-1 \
+            gir1.2-gtk-4.0 \
+            gir1.2-secret-1 \
+            rsync \
+            openssh-client \
+            sshpass \
+            desktop-file-utils
+
+      - name: Check tag matches project version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PROJECT_VERSION="$(python3 - <<'PY'
+          import tomllib
+          from pathlib import Path
+          data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          print(data["project"]["version"])
+          PY
+          )"
+          if [ "${TAG_VERSION}" != "${PROJECT_VERSION}" ]; then
+            echo "Tag version ${TAG_VERSION} does not match project version ${PROJECT_VERSION}" >&2
+            exit 1
+          fi
+
+      - name: Validate shell scripts
+        run: bash -n scripts/*.sh
+
+      - name: Compile Python sources
+        run: PYTHONPATH=src python3 -m py_compile src/rsync_ext/*.py nautilus/*.py tests/*.py
+
+      - name: Run unit tests
+        run: PYTHONPATH=src python3 -m unittest discover -s tests -v
+
+      - name: Build Debian package
+        run: ./scripts/build-deb.sh
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.deb
+          generate_release_notes: true

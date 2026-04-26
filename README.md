@@ -94,3 +94,29 @@ like a normal app package.
 If you remove the package with purge semantics, the package will best-effort remove
 per-user `~/.config/rsync-ext`, `~/.cache/rsync-ext`, and stored keyring items for
 regular desktop users.
+
+## GitHub Actions
+
+This repo includes two GitHub Actions workflows:
+
+- `CI`: runs on pushes and pull requests, validates scripts, runs tests, builds the `.deb`, and uploads it as a workflow artifact
+- `Release`: runs when you push a tag like `v0.1.0`, verifies the tag matches `pyproject.toml`, builds the `.deb`, and publishes it to a GitHub Release
+
+Workflow files live in:
+
+```bash
+.github/workflows/ci.yml
+.github/workflows/release.yml
+```
+
+Before the first release, push the repository to GitHub and make sure Actions are enabled for the repo. The release workflow uses the default `GITHUB_TOKEN` with `contents: write` permission to create the GitHub Release and upload the built `.deb`.
+
+Typical release flow:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+After the tag is pushed, GitHub Actions will create the release and attach the built
+`.deb` automatically.
