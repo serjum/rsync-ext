@@ -8,6 +8,7 @@ from rsync_ext.errors import TransferError, ValidationError
 from rsync_ext.models import Connection
 from rsync_ext.transfer import (
     CommandResult,
+    build_browse_command,
     build_test_command,
     build_transfer_plan,
     map_command_error,
@@ -169,6 +170,52 @@ class TransferTests(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             build_test_command(connection, secret_store=FakeSecretStore(password=None))
+
+    def test_browse_command_uses_saved_auth_and_remote_listing_script(self) -> None:
+        connection = Connection(
+            id="demo",
+            label="Demo",
+            host="example.com",
+            username="sergiu",
+            auth_type="password",
+            default_destination_path="/srv/default",
+        )
+
+        command, env = build_browse_command(
+            connection,
+            "~/media",
+            secret_store=FakeSecretStore(),
+        )
+
+        joined = " ".join(command)
+        self.assertEqual(Path(command[0]).name, "sshpass")
+        self.assertIn("SSHPASS", env)
+        self.assertIn("StrictHostKeyChecking=accept-new", joined)
+        self.assertIn('for entry in ./* ./.??* ./.[!.]*; do', joined)
+        self.assertIn('probe="$target"', joined)
+        self.assertIn('probe="${probe%/*}"', joined)
+        self.assertIn("sergiu@example.com", joined)
+
+    def test_browse_command_uses_key_auth_options(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            key = Path(tmpdir) / "id_ed25519"
+            key.write_text("key", encoding="utf-8")
+            connection = Connection(
+                id="demo",
+                label="Demo",
+                host="example.com",
+                username="sergiu",
+                auth_type="ssh_key",
+                private_key_path=str(key),
+                default_destination_path="/srv/default",
+            )
+
+            command, _env = build_browse_command(connection, "/srv/default")
+
+        joined = " ".join(command)
+        self.assertIn("BatchMode=yes", joined)
+        self.assertIn("PasswordAuthentication=no", joined)
+        self.assertIn(str(key), joined)
 
     def test_map_command_error_recognizes_host_key_mismatch(self) -> None:
         error = map_command_error(

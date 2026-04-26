@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,6 +74,31 @@ def build_ssh_command(connection: Connection, *, accept_new_hostkey: bool) -> li
     return command
 
 
+def _apply_password_auth(
+    connection: Connection,
+    command: list[str],
+    env: dict[str, str],
+    *,
+    secret_store: SecretStore | None,
+    password_override: str | None = None,
+    purpose: str,
+) -> tuple[list[str], dict[str, str]]:
+    if connection.auth_type != "password":
+        return command, env
+
+    sshpass_path = ensure_binary("sshpass", purpose)
+    password = password_override
+    if password is None:
+        store = secret_store or SecretStore()
+        password = store.get_password(connection.id)
+    if not password:
+        raise ValidationError(
+            f"No password is stored in GNOME Keyring for '{connection.label}'."
+        )
+    env["SSHPASS"] = password
+    return [sshpass_path, "-e"] + command, env
+
+
 def build_transfer_plan(
     connection: Connection,
     sources: list[str],
@@ -109,16 +135,13 @@ def build_transfer_plan(
 
     env = os.environ.copy()
 
-    if connection.auth_type == "password":
-        sshpass_path = ensure_binary("sshpass", "password-based transfers")
-        store = secret_store or SecretStore()
-        password = store.get_password(connection.id)
-        if not password:
-            raise ValidationError(
-                f"No password is stored in GNOME Keyring for '{connection.label}'."
-            )
-        env["SSHPASS"] = password
-        command = [sshpass_path, "-e"] + command
+    command, env = _apply_password_auth(
+        connection,
+        command,
+        env,
+        secret_store=secret_store,
+        purpose="password-based transfers",
+    )
 
     return TransferPlan(
         command=command,
@@ -139,18 +162,103 @@ def build_test_command(
     command.append("printf ok")
     env = os.environ.copy()
 
-    if connection.auth_type == "password":
-        sshpass_path = ensure_binary("sshpass", "password-based connections")
-        store = secret_store or SecretStore()
-        password = store.get_password(connection.id)
-        if not password:
-            raise ValidationError(
-                f"No password is stored in GNOME Keyring for '{connection.label}'."
-            )
-        env["SSHPASS"] = password
-        command = [sshpass_path, "-e"] + command
+    command, env = _apply_password_auth(
+        connection,
+        command,
+        env,
+        secret_store=secret_store,
+        purpose="password-based connections",
+    )
 
     return command, env
+
+
+def build_browse_command(
+    connection: Connection,
+    dest_path: str,
+    *,
+    accept_new_hostkey: bool = True,
+    secret_store: SecretStore | None = None,
+    password_override: str | None = None,
+) -> tuple[list[str], dict[str, str]]:
+    connection.validate()
+    remote_path = normalize_destination_path(dest_path)
+    command = build_ssh_command(connection, accept_new_hostkey=accept_new_hostkey)
+    command.append(f"{connection.username}@{connection.host}")
+    command.append(_build_remote_browse_script(remote_path))
+    env = os.environ.copy()
+    command, env = _apply_password_auth(
+        connection,
+        command,
+        env,
+        secret_store=secret_store,
+        password_override=password_override,
+        purpose="password-based browsing",
+    )
+    return command, env
+
+
+def browse_remote_directories(
+    connection: Connection,
+    dest_path: str,
+    *,
+    accept_new_hostkey: bool = True,
+    secret_store: SecretStore | None = None,
+    password_override: str | None = None,
+) -> tuple[str, list[str]]:
+    command, env = build_browse_command(
+        connection,
+        dest_path,
+        accept_new_hostkey=accept_new_hostkey,
+        secret_store=secret_store,
+        password_override=password_override,
+    )
+    result = run_command(command, env)
+    if result.returncode != 0:
+        raise map_command_error(result)
+
+    lines = result.stdout.splitlines()
+    if not lines:
+        raise TransferError(
+            "The server did not return a directory listing.",
+            details=result.stderr or result.stdout,
+        )
+
+    current_path = lines[0].strip()
+    directories = [line.strip() for line in lines[1:] if line.strip()]
+    return current_path, directories
+
+
+def _build_remote_browse_script(dest_path: str) -> str:
+    quoted_path = shlex.quote(dest_path)
+    return (
+        f"target={quoted_path}; "
+        'case "$target" in '
+        '"~") target="$HOME" ;; '
+        '"~/"*) target="$HOME/${target#\\~/}" ;; '
+        '"") target="$HOME" ;; '
+        '/*) ;; '
+        '*) target="$HOME/$target" ;; '
+        "esac; "
+        'probe="$target"; '
+        'while [ ! -d "$probe" ] && [ "$probe" != "/" ] && [ "$probe" != "." ]; do '
+        'case "$probe" in '
+        '"") probe="." ;; '
+        '/*) probe="${probe%/*}"; [ -n "$probe" ] || probe="/" ;; '
+        '*/?*) probe="${probe%/*}" ;; '
+        '*) probe="." ;; '
+        "esac; "
+        "done; "
+        'if [ ! -d "$probe" ]; then probe="$HOME"; fi; '
+        'target="$probe"; '
+        'cd -- "$target" && '
+        "pwd -P && "
+        '{ for entry in ./* ./.??* ./.[!.]*; do '
+        '[ -d "$entry" ] || continue; '
+        'name="${entry#./}"; '
+        'printf \'%s\\n\' "$name"; '
+        'done; } | LC_ALL=C sort -u'
+    )
 
 
 def run_command(command: list[str], env: dict[str, str]) -> CommandResult:

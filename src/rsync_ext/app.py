@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import subprocess
 import threading
+from pathlib import PurePosixPath
+from typing import Callable
 from pathlib import Path
 
 import gi
@@ -16,8 +18,14 @@ from rsync_ext.deps import check_dependencies
 from rsync_ext.logging_utils import setup_logging
 from rsync_ext.models import Connection
 from rsync_ext.secrets import SecretStore
-from rsync_ext.transfer import CommandResult, build_transfer_plan, map_command_error, test_connection
-from rsync_ext.transfer import should_retry_with_inplace
+from rsync_ext.transfer import (
+    CommandResult,
+    browse_remote_directories,
+    build_transfer_plan,
+    map_command_error,
+    should_retry_with_inplace,
+    test_connection,
+)
 
 LOGGER = setup_logging()
 
@@ -356,11 +364,14 @@ class ConnectionEditorWindow(Adw.Window):
         self.dest_entry = Gtk.Entry(
             text=connection.default_destination_path if connection else "~/"
         )
+        self.dest_entry.set_hexpand(True)
         self.enabled_switch = Gtk.Switch(active=connection.enabled if connection else True)
         self.pick_key_button = Gtk.Button(label="Browse...")
         self.pick_key_button.connect("clicked", self.on_pick_key_clicked)
         self.clear_key_button = Gtk.Button(label="Clear")
         self.clear_key_button.connect("clicked", self.on_clear_key_clicked)
+        self.browse_dest_button = Gtk.Button(label="Browse Server...")
+        self.browse_dest_button.connect("clicked", self.on_browse_destination_clicked)
 
         self.auth_combo.connect("notify::selected", self.on_auth_changed)
 
@@ -380,7 +391,6 @@ class ConnectionEditorWindow(Adw.Window):
                 "Password" if not connection else "Password (leave blank to keep current)",
                 self.password_entry,
             ),
-            ("Default Destination Path", self.dest_entry),
         ]:
             form.append(_field_row(title, widget))
         form.append(
@@ -390,6 +400,15 @@ class ConnectionEditorWindow(Adw.Window):
                     self.key_entry,
                     self.pick_key_button,
                     self.clear_key_button,
+                ),
+            )
+        )
+        form.append(
+            _field_row(
+                "Default Destination Path",
+                _inline_widget_row(
+                    self.dest_entry,
+                    self.browse_dest_button,
                 ),
             )
         )
@@ -442,6 +461,53 @@ class ConnectionEditorWindow(Adw.Window):
 
     def on_clear_key_clicked(self, _button: Gtk.Button) -> None:
         self.key_entry.set_text("")
+
+    def on_browse_destination_clicked(self, _button: Gtk.Button) -> None:
+        LOGGER.info("Browse destination clicked from ConnectionEditorWindow")
+        try:
+            connection = self._build_preview_connection()
+            browser = RemoteDirectoryBrowserWindow(
+                self,
+                connection=connection,
+                initial_path=self.dest_entry.get_text().strip() or "~/",
+                secret_store=self.secret_store,
+                password_override=self._password_override_for_browse(),
+                on_select=self.dest_entry.set_text,
+            )
+        except Exception as exc:
+            LOGGER.exception("Opening remote browser from ConnectionEditorWindow failed")
+            self.status_label.set_text(str(exc))
+            return
+
+        self.parent_window.app.present_window(browser)
+
+    def _build_preview_connection(self) -> Connection:
+        auth_type = self.auth_combo.get_selected_item().get_string()
+        connection = Connection(
+            id=self.connection.id if self.connection else "__preview__",
+            label=self.label_entry.get_text().strip() or "Preview",
+            host=self.host_entry.get_text().strip(),
+            port=int(self.port_entry.get_text().strip() or "22"),
+            username=self.user_entry.get_text().strip(),
+            auth_type=auth_type,
+            private_key_path=self.key_entry.get_text().strip() or None,
+            default_destination_path=self.dest_entry.get_text().strip() or "~/",
+            enabled=self.enabled_switch.get_active(),
+        )
+        connection.validate()
+        return connection
+
+    def _password_override_for_browse(self) -> str | None:
+        auth_type = self.auth_combo.get_selected_item().get_string()
+        if auth_type != "password":
+            return None
+
+        password = self.password_entry.get_text()
+        if password:
+            return password
+        if self.connection is None:
+            raise ValueError("Enter a password before browsing the server.")
+        return None
 
     def on_save_clicked(self, _button: Gtk.Button) -> None:
         LOGGER.info("Save connection clicked existing=%s", self.connection is not None)
@@ -505,6 +571,9 @@ class SendWindow(Adw.ApplicationWindow):
         self.dest_entry = Gtk.Entry(
             text=initial_dest_path or connection.default_destination_path,
         )
+        self.dest_entry.set_hexpand(True)
+        self.browse_dest_button = Gtk.Button(label="Browse Server...")
+        self.browse_dest_button.connect("clicked", self.on_browse_clicked)
         self.disable_unix_attrs_switch = Gtk.Switch(active=True)
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -522,7 +591,15 @@ class SendWindow(Adw.ApplicationWindow):
         )
         summary.set_wrap(True)
         root.append(summary)
-        root.append(_field_row("Destination Path", self.dest_entry))
+        root.append(
+            _field_row(
+                "Destination Path",
+                _inline_widget_row(
+                    self.dest_entry,
+                    self.browse_dest_button,
+                ),
+            )
+        )
         root.append(
             _compact_field_row(
                 "Disable Unix perms/owner/group",
@@ -550,6 +627,29 @@ class SendWindow(Adw.ApplicationWindow):
 
         if not sources:
             self.status_label.set_text("No local files were selected.")
+
+    def on_browse_clicked(self, _button: Gtk.Button) -> None:
+        LOGGER.info("Browse destination clicked from SendWindow")
+        app = self.get_application()
+        if app is None:
+            self.status_label.set_text("Application instance is unavailable.")
+            return
+
+        try:
+            browser = RemoteDirectoryBrowserWindow(
+                self,
+                connection=self.connection,
+                initial_path=self.dest_entry.get_text().strip()
+                or self.connection.default_destination_path,
+                secret_store=app.secret_store,
+                on_select=self.dest_entry.set_text,
+            )
+        except Exception as exc:
+            LOGGER.exception("Opening remote browser from SendWindow failed")
+            self.status_label.set_text(str(exc))
+            return
+
+        app.present_window(browser)
 
     def on_manage_clicked(self, _button: Gtk.Button) -> None:
         LOGGER.info("Manage Connections clicked from SendWindow")
@@ -774,6 +874,167 @@ class TransferWindow(Adw.ApplicationWindow):
         return False
 
 
+class RemoteDirectoryBrowserWindow(Adw.Window):
+    def __init__(
+        self,
+        parent: Gtk.Window,
+        *,
+        connection: Connection,
+        initial_path: str,
+        secret_store: SecretStore,
+        on_select: Callable[[str], None],
+        password_override: str | None = None,
+    ) -> None:
+        super().__init__(
+            application=parent.get_application(),
+            title="Browse Server",
+            transient_for=parent,
+            modal=True,
+        )
+        self.connection = connection
+        self.secret_store = secret_store
+        self.on_select = on_select
+        self.password_override = password_override
+        self.current_path = initial_path or connection.default_destination_path
+        self.set_default_size(640, 480)
+
+        cancel_button = Gtk.Button(label="Cancel")
+        cancel_button.connect("clicked", lambda _button: self.close())
+        self.select_button = Gtk.Button(label="Use This Folder")
+        self.select_button.connect("clicked", self.on_select_clicked)
+
+        self.status_label = Gtk.Label(xalign=0)
+        self.status_label.set_wrap(True)
+        self.path_entry = Gtk.Entry(editable=False)
+        self.path_entry.set_hexpand(True)
+
+        refresh_button = Gtk.Button(label="Refresh")
+        refresh_button.connect("clicked", self.on_refresh_clicked)
+        self.up_button = Gtk.Button(label="Up")
+        self.up_button.connect("clicked", self.on_up_clicked)
+
+        self.directory_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        scroller = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        scroller.set_child(self.directory_box)
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        root.set_margin_top(18)
+        root.set_margin_bottom(18)
+        root.set_margin_start(18)
+        root.set_margin_end(18)
+        root.append(
+            Gtk.Label(
+                label=(
+                    f"Browsing {connection.username}@{connection.host}:{connection.port}"
+                ),
+                xalign=0,
+            )
+        )
+        root.append(
+            _field_row(
+                "Current Folder",
+                _inline_widget_row(
+                    self.path_entry,
+                    self.up_button,
+                    refresh_button,
+                ),
+            )
+        )
+        root.append(self.status_label)
+        root.append(scroller)
+
+        self.set_content(
+            _toolbar_content(
+                root,
+                start_widgets=[cancel_button],
+                end_widgets=[self.select_button],
+            )
+        )
+
+        self.load_directory(self.current_path)
+
+    def on_select_clicked(self, _button: Gtk.Button) -> None:
+        self.on_select(self.current_path)
+        self.close()
+
+    def on_refresh_clicked(self, _button: Gtk.Button) -> None:
+        self.load_directory(self.current_path)
+
+    def on_up_clicked(self, _button: Gtk.Button) -> None:
+        self.load_directory(_remote_parent_path(self.current_path))
+
+    def load_directory(self, path: str) -> None:
+        self.status_label.set_text("Loading remote folders...")
+        self.path_entry.set_text(path)
+        self._set_loading(True)
+
+        def worker() -> None:
+            try:
+                current_path, directories = browse_remote_directories(
+                    self.connection,
+                    path,
+                    accept_new_hostkey=True,
+                    secret_store=self.secret_store,
+                    password_override=self.password_override,
+                )
+            except Exception as exc:
+                LOGGER.exception("Remote browse failed for connection_id=%s", self.connection.id)
+                details = getattr(exc, "details", "")
+                if details:
+                    LOGGER.error(
+                        "Remote browse details for connection_id=%s: %s",
+                        self.connection.id,
+                        details,
+                    )
+                GLib.idle_add(self._finish_load_error, str(exc), details)
+                return
+
+            GLib.idle_add(self._finish_load_success, current_path, directories)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_load_success(self, current_path: str, directories: list[str]) -> bool:
+        self.current_path = current_path
+        self.path_entry.set_text(current_path)
+        self.status_label.set_text("Select a folder or use the current one.")
+        self._populate_directories(directories)
+        self._set_loading(False)
+        return False
+
+    def _finish_load_error(self, message: str, details: str) -> bool:
+        self.status_label.set_text(details or message)
+        self._populate_directories([])
+        self._set_loading(False)
+        return False
+
+    def _populate_directories(self, directories: list[str]) -> None:
+        while True:
+            child = self.directory_box.get_first_child()
+            if child is None:
+                break
+            self.directory_box.remove(child)
+
+        if not directories:
+            placeholder = Gtk.Label(label="No subfolders found here.", xalign=0)
+            placeholder.add_css_class("dim-label")
+            self.directory_box.append(placeholder)
+            return
+
+        for directory in directories:
+            button = Gtk.Button(label=directory, halign=Gtk.Align.FILL)
+            button.set_halign(Gtk.Align.FILL)
+            button.set_hexpand(True)
+            button.connect("clicked", self.on_directory_clicked, directory)
+            self.directory_box.append(button)
+
+    def on_directory_clicked(self, _button: Gtk.Button, directory: str) -> None:
+        self.load_directory(_remote_child_path(self.current_path, directory))
+
+    def _set_loading(self, loading: bool) -> None:
+        self.select_button.set_sensitive(not loading)
+        self.up_button.set_sensitive(not loading)
+
+
 def _field_row(title: str, widget: Gtk.Widget) -> Gtk.Box:
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
     label = Gtk.Label(label=title, xalign=0)
@@ -796,6 +1057,18 @@ def _inline_widget_row(*widgets: Gtk.Widget) -> Gtk.Box:
     for widget in widgets:
         box.append(widget)
     return box
+
+
+def _remote_child_path(base: str, child: str) -> str:
+    if base == "/":
+        return f"/{child}"
+    return str(PurePosixPath(base) / child)
+
+
+def _remote_parent_path(path: str) -> str:
+    if not path:
+        return "/"
+    return str(PurePosixPath(path).parent)
 
 
 def _toolbar_content(

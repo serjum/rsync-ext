@@ -114,7 +114,7 @@ Build an installable `.deb` package with:
 That creates:
 
 ```bash
-dist/rsync-ext_0.1.0_all.deb
+dist/rsync-ext_<version>_all.deb
 ```
 
 You can open that `.deb` in Ubuntu App Center/App Manager to install or remove it
@@ -149,3 +149,36 @@ git push origin v0.1.0
 
 After the tag is pushed, GitHub Actions will create the release and attach the built
 `.deb` automatically.
+
+## Make Targets
+
+The repo includes a [Makefile](/home/sergiu/projects/rsync-ext/Makefile:1) for common release tasks:
+
+```bash
+make help
+make version
+make install-local
+make uninstall-local
+make release
+make bump-patch
+make bump-minor
+make bump-major
+make build-deb
+make tag-release
+make release-patch
+make release-minor
+make release-major
+```
+
+Notes:
+
+- `install-local` runs `./scripts/install-local.sh`
+- `uninstall-local` runs `./scripts/uninstall-local.sh`
+- `make release` prompts for `patch`, `minor`, `major`, or `current`, defaulting to `current`
+- `make release` requires a clean git working tree before it starts
+- if you choose `patch`, `minor`, or `major`, `make release` bumps the version, commits the version files, builds the `.deb`, creates the tag, and prints the push command
+- if you choose `current`, `make release` keeps the current version, builds the `.deb`, creates the tag, and prints the push command
+- `bump-*` updates both `pyproject.toml` and `src/rsync_ext/__init__.py`
+- `tag-release` creates an annotated tag like `v0.1.1` from the current project version
+- `release-*` bumps the version, builds the `.deb`, and creates the release tag
+- `tag-release` requires a clean git working tree
