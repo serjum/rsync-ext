@@ -11,6 +11,35 @@ selected local files to saved SSH destinations through `rsync`.
 - Editable default destination path per connection
 - Transfer progress window and desktop notifications
 
+## Documentation
+
+Project documentation lives in [docs/PROJECT.md](/home/sergiu/projects/rsync-ext/docs/PROJECT.md:1).
+
+It includes:
+
+- architecture and component overview
+- install modes and runtime data locations
+- CLI command reference
+- transfer flag documentation for rsync and SSH behavior
+
+## Transfer Flags
+
+Current transfer defaults:
+
+- `rsync -az --info=progress2 --human-readable`
+- `--partial` on the first attempt
+- `--no-perms --no-owner --no-group` by default
+
+The app retries once with `--inplace` when the destination rejects rsync temporary files with `mkstemp ... Operation not permitted`.
+
+To preserve Unix owner, group, and permission metadata in CLI mode:
+
+```bash
+rsync-ext transfer --connection demo --dest-path /remote/path --preserve-unix-attrs /path/to/file
+```
+
+Full flag documentation is in [docs/PROJECT.md](/home/sergiu/projects/rsync-ext/docs/PROJECT.md:1).
+
 ## Development
 
 Run the settings app:

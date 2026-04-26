@@ -88,23 +88,26 @@ if [ "${1:-}" = "purge" ]; then
     rm -rf "${home}/.config/rsync-ext" "${home}/.cache/rsync-ext" 2>/dev/null || true
 
     runuser -u "${user}" -- env HOME="${home}" XDG_CONFIG_HOME="${home}/.config" XDG_CACHE_HOME="${home}/.cache" python3 - <<'PY' || true
-import gi
+try:
+    import gi
 
-gi.require_version("Secret", "1")
-from gi.repository import Secret
+    gi.require_version("Secret", "1")
+    from gi.repository import Secret
 
-schema = Secret.Schema.new(
-    "io.github.rsyncext",
-    Secret.SchemaFlags.NONE,
-    {"connection_id": Secret.SchemaAttributeType.STRING},
-)
+    schema = Secret.Schema.new(
+        "io.github.rsyncext",
+        Secret.SchemaFlags.NONE,
+        {"connection_id": Secret.SchemaAttributeType.STRING},
+    )
 
-items = Secret.password_search_sync(schema, {}, Secret.SearchFlags.ALL, None)
-for item in items or []:
-    attributes = item.get_attributes() or {}
-    connection_id = attributes.get("connection_id")
-    if connection_id:
-        Secret.password_clear_sync(schema, {"connection_id": connection_id}, None)
+    items = Secret.password_search_sync(schema, {}, Secret.SearchFlags.ALL, None)
+    for item in items or []:
+        attributes = item.get_attributes() or {}
+        connection_id = attributes.get("connection_id")
+        if connection_id:
+            Secret.password_clear_sync(schema, {"connection_id": connection_id}, None)
+except Exception:
+    pass
 PY
   done
 fi
