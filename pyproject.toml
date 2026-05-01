@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rsync-ext"
-version = "0.2.0"
+version = "0.2.1"
 description = "GNOME Files extension for sending local files to saved rsync SSH destinations"
 readme = "README.md"
 requires-python = ">=3.12"
