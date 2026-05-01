@@ -12,6 +12,7 @@ NAUTILUS_EXT_DIR="${NAUTILUS_EXT_DIR:-${XDG_DATA_HOME}/nautilus-python/extension
 APPS_DIR="${APPS_DIR:-${XDG_DATA_HOME}/applications}"
 LAUNCHER_PATH="${LAUNCHER_PATH:-${SITE_BIN_DIR}/rsync-ext}"
 DESKTOP_PATH="${DESKTOP_PATH:-${APPS_DIR}/io.github.rsyncext.desktop}"
+LEGACY_DESKTOP_PATH="${LEGACY_DESKTOP_PATH:-${APPS_DIR}/rsync-ext.desktop}"
 NAUTILUS_EXT_PATH="${NAUTILUS_EXT_PATH:-${NAUTILUS_EXT_DIR}/rsync_send_extension.py}"
 OLD_NAUTILUS_EXT_PATH="${OLD_NAUTILUS_EXT_PATH:-${NAUTILUS_EXT_DIR}/rsync_ext.py}"
 PURGE_USER_DATA=0
@@ -29,6 +30,7 @@ fi
 
 rm -f "${LAUNCHER_PATH}"
 rm -f "${DESKTOP_PATH}"
+rm -f "${LEGACY_DESKTOP_PATH}"
 rm -f "${NAUTILUS_EXT_PATH}"
 rm -f "${OLD_NAUTILUS_EXT_PATH}"
 rm -f "${INSTALL_METADATA_PATH}"
@@ -41,6 +43,7 @@ fi
 
 rmdir "${INSTALL_METADATA_DIR}" 2>/dev/null || true
 
+update-desktop-database "${APPS_DIR}" 2>/dev/null || true
 nautilus -q 2>/dev/null || true
 
 echo "Uninstalled rsync-ext local integration."
